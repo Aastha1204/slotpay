@@ -1,0 +1,28 @@
+# Render blueprint for the API. Use an always-on instance: sleeping hosts miss webhooks and reminder jobs.
+services:
+  - type: web
+    name: slotpay-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - { key: DATABASE_URL, sync: false }
+      - { key: SUPABASE_URL, sync: false }
+      - { key: SUPABASE_SERVICE_ROLE_KEY, sync: false }
+      - { key: SUPABASE_JWKS_URL, sync: false }
+      - { key: SUPABASE_JWT_SECRET, sync: false }
+      - { key: WEB_ORIGIN, sync: false }
+      - { key: PUBLIC_BASE_URL, sync: false }
+      - { key: JOBS_SECRET, generateValue: true }
+      - { key: DEMO_KEY, generateValue: true }
+      - { key: DEMO_MODE, value: "true" }   # demo deployments only; allows the Reset buttons. Remove for a real salon.
+      - { key: TRUST_PROXY, value: "true" }
+      - { key: RAZORPAY_KEY_ID, sync: false }
+      - { key: RAZORPAY_KEY_SECRET, sync: false }
+      - { key: RAZORPAY_WEBHOOK_SECRET, sync: false }
+      - { key: WHATSAPP_MODE, value: both }
+      - { key: WHATSAPP_PHONE_NUMBER_ID, sync: false }
+      - { key: WHATSAPP_ACCESS_TOKEN, sync: false }
+      - { key: WHATSAPP_APP_SECRET, sync: false }
+      - { key: WHATSAPP_VERIFY_TOKEN, sync: false }

@@ -1,0 +1,12 @@
+.env
+.env.local
+.venv/
+__pycache__/
+node_modules/
+.next/
+.pytest_cache/
+test-results/
+playwright-report/
+web/shots/
+web/e2e/.auth/
+*.log

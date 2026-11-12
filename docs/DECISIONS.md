@@ -1,0 +1,83 @@
+# Decisions
+
+- M1: `docs/SCOPE.md` was not provided; built from the master prompt only.
+- M1: Project built in a session scratch folder; move to a permanent folder before relying on it.
+- M1: Local DB is a plain Postgres 16 Docker container (port 54322), not full Supabase CLI. Auth/Realtime come from the hosted Supabase project; migrations are plain SQL and Supabase-compatible.
+- M1: `staff_user.id` mirrors `auth.users.id` with no FK so the schema also runs on plain Postgres (tests).
+- M1: Booking-vs-time_block overlap is enforced by symmetric triggers (both raise 23P01) guarded by a per-staff advisory lock; the booking-vs-booking guard is the exclusion constraint.
+- M1: RLS enabled on all tables with zero policies (anon/authenticated get nothing). API connects as a privileged role. FORCE RLS not used so the owner role keeps working.
+- M1: `service.advance_value` is paise for `fixed`, whole percent for `percent`.
+- M1: Added `staff_user`, `schema_migrations`, `unique(booking_id, kind)` on scheduled_message, `unique(business_id,date)` on holidays.
+- M1: Seed phones are +91 99999 000NN (NN=01..40). Seed deletes bookings explicitly before the business (booking FKs do not cascade).
+- M1: On Windows, psycopg async requires the selector event loop; set in `app/__init__.py`.
+- M1: Seed creates Supabase Auth users via the admin API when SUPABASE_URL + SERVICE_ROLE_KEY are set; otherwise placeholder UUIDs.
+- M2: Breaks are treated as busy intervals, so a service may not straddle a break; shift end bounds `start + duration + buffer`.
+- M2: Slot grid is anchored to local midnight (10:00, 10:15, ...), not to each shift start.
+- M2: A "held" booking with `hold_expires_at < now` is treated as free in availability (filtered in Python from one query per request).
+- M2: `/public/{slug}/days` and `/slots` take `staff_id` optional (omitted = any available) and use server time; no client-supplied `now`.
+- M2: Any-available assignment order is `pick_staff` (fewest booked minutes); it is wired into holds in M4.
+- M3: `POST /public/holds/{id}/release` also requires the booking's `public_token` (prevents releasing someone else's hold by guessing ids).
+- M3: Holds in M3 carry no payment (advance_due_paise=0); Razorpay order creation is added to the same endpoint in M4.
+- M3: Realtime Broadcast is sent from the API via the Realtime REST endpoint when SUPABASE_URL + service key are set; otherwise it's a no-op. The page always polls every 10 s and refetches on focus, so live updates were verified locally via polling only. The sub-second path needs a real Supabase project (verify step below).
+- M3: Rate limits are in-memory per process (20 holds/min/IP, 5/min/phone, 3 active holds/phone). Fine for a single always-on instance.
+- M3: Booking page reads the slug with `useParams` (awaiting `params` in the page left it stuck on the Suspense fallback with Cache Components on).
+- M3: Dev API entrypoint is `api/run.py` (selector event loop on Windows); `uvicorn app.main:app` directly hangs on DB connect under Windows.
+- M4: Razorpay is called through `RazorpayClient` (httpx); tests inject `FakeRzp` via FastAPI dependency override, so no network or keys are needed for `make test`.
+- M4: `confirm_booking()` locks payment + booking rows (`for update`), so verify and webhook racing confirm exactly once. Late capture: expired booking is re-confirmed in a savepoint and the exclusion constraint decides; on 23P01 the payment is auto-refunded in full after commit.
+- M4: Verify also checks the Razorpay payment's `order_id` and `amount` against our order (400 on mismatch) before confirming.
+- M4: A refund marks the payment refunded/partially_refunded at initiation; `refund.processed` / `refund.failed` update the refund row.
+- M4: `payment.failed` marks the payment failed but never releases the hold (Checkout retries). A hold ends on dismissal, expiry, or success. Dismissal calls release and returns to the time step.
+- M4: Zero advance (customer skip, service none, weekdays-only rule) confirms immediately with no order.
+- M4: Hold expiry: availability already ignores lapsed holds; `/internal/jobs/tick` (header `x-jobs-secret` = JOBS_SECRET) marks them expired and broadcasts, run each 60 s by an in-process loop. Reminders join the tick in M5.
+- M4: Confirmation lives at `/b/[slug]/confirm/[token]` so a refresh or shared link works; it polls every 2 s for up to 30 s.
+- M4: The confirmation page does not claim a WhatsApp message was sent until M5 exists.
+- M4: Webhook dedupe uses `x-razorpay-event-id`; payment.captured is also safe under a new event id because confirm_booking is idempotent.
+- M5: `WHATSAPP_MODE` = `simulator` (default) | `live` | `both`. `both` sends live only if the customer opted in AND sends succeed, and always mirrors to the simulator; a live failure in `both` is logged but not retried (the simulator copy is the demo fallback). In `live` mode failures retry up to 3 times via the job tick.
+- M5: Scheduled sends claim the row atomically (attempts+1, send_at +5 min) before the HTTP call, so no row lock is held during the call and overlapping ticks cannot double-send. A crash mid-send retries after 5 minutes.
+- M5: Confirmation and cancellation messages are sent immediately after commit; the 1-minute tick is the safety net. Reminders already in the past at confirmation time are stored as `skipped`.
+- M5: Quick-reply buttons carry `cancel:<booking_id>` / `reschedule:<booking_id>` payloads; the handler ignores a button pressed from a phone that doesn't match the booking's customer.
+- M5: Cancel policy: refund in full if cancelled at least `cancellation_cutoff_hours` before start; otherwise the advance is forfeited (owner override `force_refund` is built into `cancel_booking`, UI in M6).
+- M5: Simulator endpoints (`/demo/whatsapp/*`) require DEMO_KEY (they expose message history by phone number); disabled when DEMO_KEY is unset.
+- M5: Self-serve reschedule is NOT built: the link in WhatsApp opens a page that shows the booking and asks the customer to call the salon. Admin-side reschedule arrives in M6.
+- M5: `.ics` uses `TZID=Asia/Kolkata` with a fixed-offset VTIMEZONE (India has no DST) and is only served for confirmed/completed bookings.
+- M5: Slot-lost refunds reuse the `slotpay_booking_cancelled` template with a refund line, to avoid needing a fourth approved template.
+- M6: Admin API lives in `app/admin.py`, all routes scoped to the signed-in staff member's business. Front desk can do everything on the calendar; only the owner can use "Refund anyway" (403 otherwise). Services/prices/policies/reports restrictions are enforced in M7.
+- M6: Admin availability uses the same engine as the public page but with `min_lead_min=0` (front desk may book "right now") and excludes the booking being moved, so a reschedule may overlap its own old slot.
+- M6: Realtime payloads include an opaque `booking_id` plus staff_id/start/end/event (no personal data); the admin page refetches. The toast text is built from the authenticated calendar response, and the page also polls every 10 s and diffs for new online bookings, so it works without Supabase Realtime.
+- M6: Reschedule is one transaction (exclusion constraint decides) that also deletes and re-queues confirmation/reminders; the customer is notified by re-sending the confirmation template with the new time.
+- M6: Cancelled bookings are hidden by default (`include_cancelled=true` shows them). Lapsed holds are hidden from the calendar.
+- M6: Week view shows one stylist at a time (7 day columns) to avoid overlapping blocks; day view shows all stylists.
+- M6: DEV ONLY auth bypass: with `NEXT_PUBLIC_DEV_AUTH=1` the login page accepts a token minted by `scripts/dev_token.py` (needs SUPABASE_JWT_SECRET). Never set this in production.
+- M6: Refund state in the booking sheet reads "Refund initiated" until the refund row is `processed`, then "Refunded" (sheet polls every 3 s).
+- M7: Management API is owner-only (`/admin/manage/*`, `/admin/reports*`); front desk gets 403 and the Manage page shows "Owner access only". The calendar, bookings, blocks and customer search stay available to front desk.
+- M7: Services/staff with bookings cannot be hard-deleted (409, "deactivate instead"); inactive services and stylists disappear from the public booking page immediately.
+- M7: Shift templates are validated server-side (known keys, HH:MM, end after start, no overlaps). The shift editor UI supports one shift and one break per day; the API accepts several.
+- M7: Leave is stored as time blocks whose reason starts with "Leave", spanning whole IST days; a leave over existing bookings is refused (409). Remove leave from the Staff tab.
+- M7: Reports count by booking *start* date in IST. Revenue = price of completed bookings (GST-inclusive); "online advance collected" = captured payments (seeded included) with refunds shown separately. Utilisation = (confirmed+completed+no-show minutes) / (shift minutes minus breaks, excluding business holidays). No-show rate = no-shows / (completed + no-shows); cancellation rate = cancelled / (live + cancelled).
+- M7: CSV export is per table (summary, services, staff, daily) and fetched with the auth header, then downloaded client-side.
+- M7: Policy pages (`/b/[slug]/terms|privacy|refund|contact`) are server-rendered from live business settings and carry a "template, review before going live" banner. Unknown pages/slugs show a not-found view but return HTTP 200 (streaming after the shell).
+- M7: The booking page now shows the owner's `policy_text` before payment.
+- M8: Presenter console at `/demo?key=DEMO_KEY` (key via query or `x-demo-key`; disabled when DEMO_KEY is unset). QR is generated client-side (`qrcode.react`).
+- M8: The double-booking test opens 20 separate Postgres sessions and inserts the same slot at once, so the exclusion constraint is the sole arbiter ("1 booked · 19 rejected by the database"). It deletes its synthetic rows afterwards. It bypasses Razorpay on purpose (no orders are created).
+- M8: Timeline order is confirmed -> WhatsApp sent -> reminders scheduled (the "scheduled" event is written after the confirmation send). `audit_event.created_at` now defaults to `clock_timestamp()` (migration 0002) so events in one transaction keep their order.
+- M8: Seed inserts are batched (executemany/pipeline): reset takes about 1 s locally and stays within 10 s over a remote connection. `POST /admin/demo/reset` (owner) and `POST /demo/actions/reset` (DEMO_KEY) both rebuild everything; the business id changes on reset.
+- M8: Playwright uses the installed Chrome (`channel: chrome`), real API/DB for catalogue and slots, and stubs holds/Checkout/booking-status calls, so no Razorpay keys are needed.
+- M8: Deployment files (`Dockerfile`, `render.yaml`) are provided but nothing was deployed from this environment (no hosting accounts or keys). The build context for the API image is the repo root so the seed script ships with it.
+- M8: Added `POST /public/holds/{id}/checkout-opened` (token-protected, audit only) so the timeline can show "Checkout opened".
+- M8: The booking page's business + services are fetched on the server (`/b/[slug]` page) and handed to the client component, removing the client fetch waterfall. Lighthouse mobile (production build, local API): Performance 94, Accessibility 100, Best Practices 100, CLS 0 (was 79 / CLS 0.23 before this change). Numbers vary with hardware; re-run on the deployed URL.
+- M8: The error banner's Retry now reloads stylists as well as days and slots.
+- Review: Signature checks now refuse an empty secret or signature (an HMAC with an empty key is forgeable, which would have let anyone confirm a booking via a fake webhook when RAZORPAY_WEBHOOK_SECRET was unset). The jobs secret uses a constant-time compare.
+- Review: Rate limits key on the left-most `X-Forwarded-For` entry when `TRUST_PROXY=true` (default) and uvicorn trusts the platform proxy (`forwarded_allow_ips="*"`). Without this every customer behind Render/Vercel shared one IP and one 20/min budget. Set `TRUST_PROXY=false` if the API is exposed without a proxy (otherwise the header can be spoofed).
+- Review: Reset endpoints (`/demo/actions/reset`, `/admin/demo/reset`) require `DEMO_MODE=true`; default off.
+- Theme: "Clean white & sky blue" (chosen by the owner). Colours are tokens in `web/src/app/globals.css` (`--color-brand-50..950` sky scale, `--color-cream` #f8fbff, `--color-line` hairline borders, `--color-gold*` = pale sky accent chips, `--color-blush`, `--color-sage`); text is deep navy (`brand-900`), no black. Design language: 1px hairline borders, soft blurred shadows (`.raise`, `.glass`), sans-serif headings (Geist), sky aurora gradient behind the hero (`.bg-aurora`). The SVG kit (`art.tsx` `C`), the 3D scene (`HeroScene.tsx` `COL`), confetti colours (`motion.tsx`), `public/manifest.webmanifest` and Checkout `theme.color` in `Booking.tsx` hold their own copies. Earlier themes (rose, indigo/yellow, emerald/gold) and the old `prefers-color-scheme: dark` body override are gone.
+- 3D/motion: Front page hero is a live three.js scene (`HeroScene.tsx`: toon-shaded salon corner, pointer parallax, floating scissors) loaded lazily by `Hero3D.tsx` on first interaction or after 5 s, with the SVG illustration shown first and as the fallback (no WebGL, reduced motion, data-saver, <=2 CPU cores or <=2 GB RAM). three.js is not loaded on `/b/*`, admin or demo routes. Motion kit: `motion.tsx` (scroll `Reveal`, mouse `Tilt`, `Marquee`, `Confetti`) + keyframes in `globals.css`; all animations are disabled under `prefers-reduced-motion`. Lighthouse mobile (local prod build): `/` 96, `/b/glow-studio` 96.
+- Prototype: "one website" = a single origin. Next.js proxies `/api/*` to FastAPI (`rewrites()` in `next.config.ts`, destination from `API_INTERNAL_URL` at build/start), so browsers never call port 8000 directly. `/prototype` is the hub; `PrototypeDock` (layout, prototype builds only) links every surface and switches Owner/Front desk.
+- Prototype: `PROTOTYPE_MODE=true` exposes `POST /prototype/login` (mints an 8 h HS256 staff token for the seeded owner or front-desk user; needs `SUPABASE_JWT_SECRET`), `GET /prototype/status` and `/prototype/summary`. It is demo-only: the admin client logs in automatically and silently re-logs on a 401. The demo key is baked into the prototype web build (`NEXT_PUBLIC_DEMO_KEY`), so the presenter console and simulator open without `?key=`.
+- Prototype: Playwright now runs with `workers: 1` (live slot lists + several browsers in parallel made timings flaky). The launcher scripts use `127.0.0.1` for the API health check (PowerShell resolves `localhost` to IPv6 first) and abort loudly if the web build fails.
+- Working prototype: when `PROTOTYPE_MODE=true` and no `RAZORPAY_KEY_ID`, `get_rzp()` returns `MockRazorpay` (orders `order_mock_*`, instant refunds). The web Pay step shows a simulated checkout when the order key is `rzp_mock`; paying calls `POST /prototype/pay`, which runs the normal `confirm_booking()` + message sending. Only `order_mock_*` ids are accepted, so real orders can never be faked.
+- Working prototype: `REMINDER_DEMO_DELAY_SEC=N` schedules the "24 h" and "2 h" reminders at N s and 2N s after booking and runs the job tick every 5 s. The launcher sets 20. With 0 (default) reminders follow the appointment time. The reminder wording still says "tomorrow" / "in 2 hours" (labelled as a speed-up in the UI).
+- Working prototype: `GET /prototype/inbox/{token}` and `POST /prototype/inbox/{token}/button` expose one booking's WhatsApp conversation (token-scoped) to the on-page phone; the buttons use the same `handle_button()` as real WhatsApp and the simulator.
+- Calendar redesign: sticky stylist headers and time gutter, 96 px/hour grid, time range + status tag on each booking, legend, daily/weekly summary (bookings, online, booked value, advance collected), labelled "Day off" / "Break", hover "+ Add at <time>", auto-scroll to now (today) or the first booking, red "now" marker with time.
+
+## Customer date step is a month calendar
+`GET /public/{slug}/days` takes `days` (1–60, default 14) and each entry carries `closed` (`holiday` | `out_of_range` | null) besides `count`/`full`. The booking page asks for 31 days and renders a Monday-first month grid (counts per day, Full/Closed states, Today marker) next to the times panel on desktop, stacked on phones.
