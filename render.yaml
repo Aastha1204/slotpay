@@ -26,3 +26,6 @@ services:
       - { key: WHATSAPP_ACCESS_TOKEN, sync: false }
       - { key: WHATSAPP_APP_SECRET, sync: false }
       - { key: WHATSAPP_VERIFY_TOKEN, sync: false }
+      # Prototype / demo deployment (no Razorpay or WhatsApp accounts needed): simulated checkout + WhatsApp simulator.
+      - { key: PROTOTYPE_MODE, value: "true" }
+      - { key: REMINDER_DEMO_DELAY_SEC, value: "20" }
