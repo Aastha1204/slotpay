@@ -5,6 +5,7 @@ scripts/sync_vercel_api.py), because a Vercel project can only bundle files insi
 """
 import os
 import sys
+from urllib.parse import parse_qsl, urlencode
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_slotpay"))
 
@@ -21,8 +22,14 @@ async def app(scope, receive, send):
                 await send({"type": "lifespan.shutdown.complete"})
                 return
     if scope["type"] in ("http", "websocket"):
+        # vercel.json rewrites /api/<anything> to /api/index?__p=<anything>, which keeps multi-segment paths intact
+        qs = parse_qsl(scope.get("query_string", b"").decode(), keep_blank_values=True)
+        given = next((v for k, v in qs if k == "__p"), None)
         path = scope.get("path", "/")
-        if path == "/api" or path.startswith("/api/"):
+        if given is not None:
+            path = "/" + given.lstrip("/")
+            qs = [(k, v) for k, v in qs if k != "__p"]
+        elif path == "/api" or path.startswith("/api/"):
             path = path[4:] or "/"
-            scope = {**scope, "path": path, "raw_path": path.encode()}
+        scope = {**scope, "path": path, "raw_path": path.encode(), "query_string": urlencode(qs).encode()}
     await _api(scope, receive, send)
