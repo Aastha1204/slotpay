@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from .config import get_settings
+from .config import SERVERLESS, get_settings
 
 pool: AsyncConnectionPool | None = None
 
@@ -36,6 +36,19 @@ async def close_pool() -> None:
 
 @asynccontextmanager
 async def connection():
+    if SERVERLESS:
+        # Functions are short-lived and may run on a fresh event loop each time: one connection per request
+        # (Neon's pooled endpoint absorbs the churn; prepared statements are off for PgBouncer).
+        conn = await psycopg.AsyncConnection.connect(get_settings().database_url, row_factory=dict_row, prepare_threshold=None)
+        try:
+            yield conn
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
+        finally:
+            await conn.close()
+        return
     assert pool is not None, "pool not opened"
     async with pool.connection() as conn:
         yield conn

@@ -1,0 +1,15 @@
+{
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_PROTOTYPE": "1",
+      "NEXT_PUBLIC_DEMO_KEY": "demo123",
+      "NEXT_PUBLIC_API_BASE_URL": "/api"
+    }
+  },
+  "functions": {
+    "api/[...path].py": {
+      "maxDuration": 60,
+      "includeFiles": "api/_slotpay/**"
+    }
+  }
+}

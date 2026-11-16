@@ -6,7 +6,7 @@ import { Avatar, CategoryTile, HeroArt, LogoMark, Pin, STYLISTS, StepCalendar, S
 import Hero3D from "@/components/Hero3D";
 import { Marquee, Reveal, Tilt } from "@/components/motion";
 
-const API = process.env.API_INTERNAL_URL ?? "http://localhost:8000";
+import { API_INTERNAL as API } from "@/lib/server-api";
 const SLUG = "glow-studio";
 
 const CATS = [

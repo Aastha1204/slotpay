@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Business } from "@/lib/booking";
 import Booking from "./Booking";
 
-const API = process.env.API_INTERNAL_URL ?? "http://localhost:8000";
+import { API_INTERNAL as API } from "@/lib/server-api";
 
 // The business + services are fetched on the server so the first paint already contains real content
 // (no client-side fetch waterfall); the client takes over for stylists, slots and holds.

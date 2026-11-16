@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import type { Business } from "@/lib/booking";
 import { PAGES, PolicyPage, policy } from "@/lib/policies";
 
-const API = process.env.API_INTERNAL_URL ?? "http://localhost:8000";
+import { API_INTERNAL as API } from "@/lib/server-api";
 
 async function Content({ params }: { params: Promise<{ slug: string; page: string }> }) {
   const { slug, page } = await params;

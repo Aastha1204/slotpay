@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -8,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
 from .auth import Staff, current_staff, require_role
-from .config import get_settings
+from .config import SERVERLESS, get_settings
+from . import bootstrap
 from . import jobs
 from .admin import router as admin_router
 from .demo import router as demo_router
@@ -61,6 +63,26 @@ async def request_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["x-request-id"] = rid
     return response
+
+
+_last_tick = 0.0
+
+
+@app.middleware("http")
+async def serverless_boot(request: Request, call_next):
+    """On Vercel there is no startup hook or background loop: prepare the database on first use and run the
+    job tick (expire holds, send due WhatsApp reminders) at most every 5 s while the API is being used."""
+    global _last_tick
+    if SERVERLESS and request.url.path != "/health":
+        await bootstrap.ensure_ready()
+        now = time.monotonic()
+        if now - _last_tick >= 5:
+            _last_tick = now
+            try:
+                await jobs.tick()
+            except Exception:
+                log.exception("job tick failed")
+    return await call_next(request)
 
 
 @app.get("/health")
