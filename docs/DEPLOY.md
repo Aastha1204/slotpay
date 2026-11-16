@@ -23,3 +23,6 @@ Check `https://<your-api>.onrender.com/health` returns 200.
 | `NEXT_PUBLIC_DEMO_KEY` | same value as the API's `DEMO_KEY` |
 
 Set the Vercel **Root Directory** to `web`, then redeploy (the `NEXT_PUBLIC_*` values are baked in at build time).
+
+## Vercel-only deployment (what slotpay.vercel.app uses)
+No separate API host is needed: `web/api/index.py` serves the FastAPI app at `/api/*`, and a Neon Postgres connected from Vercel's Storage tab supplies `DATABASE_URL`. The first request migrates and seeds the demo salon. Prototype mode, simulated payments and the WhatsApp simulator are on by default (see `get_settings()` in `api/app/config.py`). After changing `api/app`, `supabase/` or `scripts/migrate.py`, run `python scripts/sync_vercel_api.py` and commit `web/api/_slotpay`. To run the browser tests against it: `E2E_BASE_URL=https://slotpay.vercel.app npx playwright test`.

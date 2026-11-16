@@ -11,12 +11,12 @@ export default defineConfig({
   workers: 1, // one browser at a time: slot lists are fetched live, so parallel load makes timings flaky
   retries: 0,
   reporter: [["list"]],
-  use: { baseURL: "http://localhost:3100", channel: "chrome", trace: "retain-on-failure", screenshot: "only-on-failure" },
+  use: { baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3100", channel: "chrome", trace: "retain-on-failure", screenshot: "only-on-failure" },
   projects: [
     { name: "pixel-7", use: { ...devices["Pixel 7"], channel: "chrome" } },
     { name: "small-360x800", use: { ...devices["Pixel 7"], viewport: { width: 360, height: 800 }, channel: "chrome" } },
   ],
-  webServer: [
+  webServer: process.env.E2E_BASE_URL ? undefined : [
     { command: `${PY} ../api/run.py`, url: "http://localhost:8000/health", reuseExistingServer: true, timeout: 60_000,
       env: { DATABASE_URL: DB, WEB_ORIGIN: "http://localhost:3100", DEMO_KEY: "demo123", DEMO_MODE: "true", JOBS_SECRET: "j", PROTOTYPE_MODE: "true", REMINDER_DEMO_DELAY_SEC: "8", WHATSAPP_MODE: "simulator", SUPABASE_JWT_SECRET: "local-prototype-jwt-secret-0123456789abcdef" } },
     { command: "npx next dev -p 3100", url: "http://localhost:3100/b/glow-studio", reuseExistingServer: true, timeout: 120_000,
